@@ -1,0 +1,401 @@
+================================================================================
+        PROYECTO: ANÁLISIS DE VERACIDAD Y HONESTIDAD EN EVENTOS HISTÓRICOS
+                     PLANTEAMIENTO, DETALLES TÉCNICOS Y PLAN DE FASES
+================================================================================
+
+Versión del documento: 1.0
+Entorno de desarrollo: CachyOS (Arch-based), shell fish, n8n autoalojado (Community Edition)
+Alcance del autor: implementación íntegra del flujo en n8n (la documentación,
+                  informes y presentación corresponden a otro miembro del equipo)
+
+
+--------------------------------------------------------------------------------
+1. OBJETIVO DEL PROYECTO
+--------------------------------------------------------------------------------
+
+Construir un agente conversacional en n8n capaz de recibir un evento histórico,
+consultar fuentes enciclopédicas con líneas editoriales y agendas políticas
+distintas, y devolver un análisis estructurado en torno a tres métricas:
+
+    - Capacidad de Reconstrucción de los Hechos
+    - Veracidad
+    - Honestidad
+
+El valor del proyecto no está en "decir si algo es verdad", sino en exponer de
+forma medible CÓMO se narra el mismo hecho desde marcos políticos diferentes.
+
+
+--------------------------------------------------------------------------------
+2. DECISIONES YA TOMADAS
+--------------------------------------------------------------------------------
+
+2.1. Modelo LLM
+    - Modelo principal: Gemini 2.5 Flash (Google AI Studio).
+    - Motivos: ventana de contexto ~1M tokens, límite gratuito alto
+      (~1.500 peticiones/día), soporte sólido de tool calling y competencia
+      multilingüe (chino, ruso, español, vietnamita...).
+    - La "API Key" de Google AI Studio es lo que el profesor denominó
+      "token de verificación". Se configura como Credential en n8n.
+    - Plan B (si se agotan cuotas o se necesita menor latencia): Groq con
+      llama-3.1-8b-instant (contexto 131K, ~1.000 req/día).
+
+2.2. Estrategia de versionado
+    - Enfoque MANUAL (descartado n8n-sync / n8n-gitops por simplicidad).
+    - Flujo de trabajo: diseñar en la UI -> Workflow > Download (JSON) ->
+      guardar en el repositorio -> commit -> push.
+    - Restauración: Workflow > Import from JSON en la instancia de n8n.
+    - Limitación asumida: los diffs en Git del JSON serán poco legibles.
+      Se mitiga manteniendo un CHANGELOG.md con descripción legible de cambios.
+
+2.3. Fuentes de información
+    - Wikipedia (API REST/MediaWiki): fuente occidental de referencia.
+    - Wikidata (API + SPARQL): pivote de identidad y títulos multilingües.
+    - Qiuwen Baike (求闻百科): fuente de contraste con agenda política china.
+      Construida sobre MediaWiki => misma API estándar (action=query, etc.).
+      Se presenta explícitamente como alternativa a Wikipedia con "valores
+      chinos", por lo que su sesgo editorial es claro y aprovechable.
+    - Baidu Baike: DESCARTADA como fuente principal. Su acceso requiere
+      plataforma Qianfan/AppBuilder (API Key, cuotas, posible facturación).
+      Se deja como fuente opcional/secundaria.
+    - Gran Enciclopedia Rusa (БРЭ): sin API pública estándar. Solo viable vía
+      volcados de datos o scraping de bigenc.ru => baja fiabilidad para un
+      agente en tiempo real. Se deja como fuente opcional/secundaria.
+    - Conclusión: el eje funcional del proyecto es Wikipedia + Wikidata +
+      Qiuwen Baike. Las demás se tratan como "fuentes opcionales" y su
+      ausencia debe declararse explícitamente (esto alimenta la métrica de
+      Honestidad).
+
+
+--------------------------------------------------------------------------------
+3. DEFINICIÓN OPERATIVA DE LAS MÉTRICAS
+--------------------------------------------------------------------------------
+
+Las tres métricas se inspiran en conceptos académicos y se traducen a
+instrucciones ejecutables por el LLM (inyectadas en el system prompt).
+
+3.1. CAPACIDAD DE RECONSTRUCCIÓN
+    Concepto académico: consistencia factual / corroboración entre fuentes
+    (tradición de crítica histórica: si fuentes independientes coinciden en
+    un hecho, este se considera probado).
+
+    Operacionalización:
+      - Extraer proposiciones atómicas verificables de cada versión.
+      - Calcular el solapamiento entre las proposiciones de las fuentes,
+        ignorando variaciones de cifras, adjetivos y marco interpretativo.
+      - Resultado esperado: un valor alto cuando las versiones difieren en
+        cifras o énfasis pero coinciden en el núcleo del evento
+        (ej. Batalla de Gaugamela: retirada del rey, disposición de hoplitas).
+        Un valor bajo cuando las narrativas son incompatibles entre sí
+        (ej. campaña de Italia en la IIGM: "compleja contienda" vs.
+        "retirada general inmediata" => no permiten reconstruir un relato
+        común).
+
+3.2. VERACIDAD
+    Concepto académico: facticidad / verosimilitud calibrada. No se persigue
+    una "verdad absoluta", sino medir la distancia de cada versión respecto
+    al consenso o a la versión más plausible.
+
+    Operacionalización:
+      - Para cada afirmación central de cada versión, pedir al modelo:
+          a) Corroboración externa: ¿está respaldada por la otra fuente o
+             por conocimiento histórico establecido?
+          b) Plausibilidad interna: ¿es coherente con el resto de la
+             narrativa y con el contexto histórico conocido?
+      - La "versión más plausible" no es una media, sino la que presenta
+        mayor densidad de proposiciones verificables y menor contradicción
+        con el registro histórico amplio.
+
+3.3. HONESTIDAD
+    Concepto académico: Densidad de Información Historiográfica (HID),
+    marco que mide la proporción de contenido verificable frente a no
+    verificable en un texto histórico, presentado como medida cuantitativa
+    de honestidad historiográfica.
+
+    Operacionalización:
+      - Clasificar cada proposición en:
+          A1 -> verificable con evidencia existente
+          A2 -> verificable en principio, falta evidencia
+          B  -> verificabilidad límite
+          C  -> no verificable en principio (juicio de valor, propaganda,
+                retórica)
+      - Honestidad = porcentaje de proposiciones B+C sobre el total
+        (o, equivalentemente, ratio A1 sobre el total).
+      - Es el detector directo de "juicios significativos y/o propagandísticos".
+
+NOTA: estas definiciones se inyectan en el system prompt del agente y se
+refuerzan pidiendo al modelo que devuelva la salida en un esquema JSON fijo
+(ver Fase 3).
+
+
+--------------------------------------------------------------------------------
+4. ESTRATEGIA DE ALINEACIÓN DE ARTÍCULOS ENTRE FUENTES
+--------------------------------------------------------------------------------
+
+Problema: el mismo hecho tiene títulos distintos según la fuente
+(ej. "Operación Barbarroja" en Wikipedia vs. "Gran Guerra Patria" en el
+discurso chino/soviético). No existe enlace directo entre Wikipedia y Qiuwen.
+
+Estrategia en 4 pasos (implementable con nodos HTTP Request):
+
+  PASO 1 - Anclaje en Wikidata
+      wbsearchentities con el término del usuario -> obtener Q-ID.
+
+  PASO 2 - Títulos multilingües
+      Consultar sitelinks de la entidad -> obtener el título del artículo
+      en el idioma de destino (chino para Qiuwen).
+
+  PASO 3 - Búsqueda en la fuente de destino
+      Usar la API de MediaWiki de Qiuwen (action=query&list=search) con el
+      título obtenido. La búsqueda por texto es tolerante a variantes.
+
+  PASO 4 - Fallback
+      Si no hay resultados: el LLM genera variantes del título en el idioma
+      objetivo (y palabras clave equivalentes) y se reintenta la búsqueda.
+      Este fallback es más frágil pero cubre los casos politizados en los
+      que Wikidata devuelve el título occidental.
+
+Consideración técnica: las APIs de MediaWiki requieren un User-Agent
+identificable y descriptivo; sin él, pueden devolver 403 o limitar el acceso.
+
+
+--------------------------------------------------------------------------------
+5. ENTORNO TÉCNICO
+--------------------------------------------------------------------------------
+
+5.1. Sistema
+    - SO: CachyOS (Arch Linux).
+    - Shell: fish.
+    - Docker: NO se da por garantizado. Verificar con:
+          docker --version
+          docker compose version
+      Si falta, instalar (según repos de CachyOS/Arch) y habilitar el
+      servicio: sudo systemctl enable --now docker
+
+5.2. n8n
+    - Edición: Community Edition, autoalojada, SIN coste.
+    - Despliegue recomendado: Docker Compose con imagen oficial n8nio/n8n,
+      volumen persistente para /home/node/.n8n.
+    - Acceso: http://localhost:5678
+    - Persistencia: SQLite interna (por defecto) en el volumen.
+
+    Esqueleto de docker-compose.yml (a validar en la Fase 0):
+
+        services:
+          n8n:
+            image: n8nio/n8n
+            container_name: n8n
+            ports:
+              - "5678:5678"
+            environment:
+              - GENERIC_TIMEZONE=Europe/Madrid
+              - N8N_SECURE_COOKIE=false
+            volumes:
+              - n8n_data:/home/node/.n8n
+            restart: unless-stopped
+        volumes:
+          n8n_data:
+
+5.3. Repositorio Git
+    - Repositorio nuevo en GitHub.
+    - Contenido versionado: workflows exportados (JSON), README.md,
+      CHANGELOG.md, docker-compose.yml (sin secretos), documentación.
+    - .gitignore obligatorio: .env, *.key, *.secret, credenciales, backups
+      locales de la base de datos.
+
+5.4. Credenciales y secretos
+    - Las API Keys (Gemini, y en su caso Baidu) se guardan EXCLUSIVAMENTE en
+      las Credentials de n8n, que las cifra en su base de datos local.
+    - NUNCA se suben al repositorio.
+    - El token de verificación del webhook (si se usa Webhook como trigger)
+      se configura con Authentication > Header Auth en el nodo Webhook.
+
+
+--------------------------------------------------------------------------------
+6. CONSIDERACIONES A TENER EN CUENTA
+--------------------------------------------------------------------------------
+
+6.1. Cuotas y límites
+    - Gemini 2.5 Flash gratuito: ~1.500 req/día. Cada ejecución del agente
+      consume varias llamadas (razonamiento + tools + consolidación).
+      Estimar el consumo por caso de prueba antes de hacer baterías grandes.
+    - APIs de MediaWiki (Wikipedia y Qiuwen): generosas, pero requieren
+      User-Agent identificable y espaciar ráfagas.
+    - Wikidata: sin límite estricto documentado, pero aplicar buenas prácticas.
+
+6.2. Fragilidad de fuentes
+    - Qiuwen puede cambiar su endpoint api.php o su dominio; validar la URL
+      exacta en la Fase 1 y parametrizarla en una variable, no hardcodeada
+      en cada nodo.
+    - Baidu Baike y БРЭ no se integran en la vía principal: si se intentan,
+      tratarlas como best-effort y declarar su ausencia.
+
+6.3. Diseño del prompt
+    - El system prompt debe contener: definición de las tres métricas,
+      esquema JSON de salida, instrucción explícita de declarar limitaciones
+      (fuente no encontrada, información insuficiente) y prohibición de
+      inventar datos.
+    - Conviene separar el prompt de "recopilación" del de "evaluación"; si el
+      flujo crece, usar dos llamadas al modelo (una para reconstruir, otra
+      para puntuar) en lugar de una sola.
+
+6.4. Medición reproducible
+    - Fijar un conjunto de casos de prueba (al menos 5-8 eventos de
+      conflictividad histórica con narrativas divergentes conocidas).
+    - Guardar las salidas para poder comparar versiones del prompt y del
+      flujo (esto es lo que hace defendible el proyecto ante el profesor).
+
+6.5. Limitaciones éticas y técnicas
+    - El sistema NO emite un veredicto de "verdad absoluta"; produce un
+      análisis comparado con puntuaciones calibradas.
+    - Cualquier scraping (si se contempla para БРЭ) debe respetar robots.txt
+      y límites de frecuencia.
+    - El JSON exportado contiene la estructura del flujo, no las credenciales;
+      verificar antes de cada commit.
+
+
+--------------------------------------------------------------------------------
+7. PLAN DE FASES
+--------------------------------------------------------------------------------
+
+FASE 0 - PREPARACIÓN DEL ENTORNO
+  Objetivo: tener n8n operativo y el repositorio creado.
+  Pasos:
+    0.1. Verificar docker y docker compose (comandos en 5.1).
+    0.2. Instalar/habilitar Docker si falta.
+    0.3. Crear docker-compose.yml y levantar n8n (docker compose up -d).
+    0.4. Acceder a http://localhost:5678 y completar el asistente inicial.
+    0.5. Crear repositorio en GitHub y clonarlo en local.
+    0.6. Crear estructura inicial: README.md, CHANGELOG.md, .gitignore,
+         docker-compose.yml, carpeta workflows/.
+    0.7. Primer commit y push.
+  Criterio de cierre: n8n responde en localhost y el repo tiene el esqueleto.
+
+FASE 1 - CREDENCIALES Y CONECTIVIDAD
+  Objetivo: validar que todas las APIs responden desde n8n.
+  Pasos:
+    1.1. Obtener API Key de Google AI Studio y crearla como Credential en n8n.
+    1.2. Obtener API Key de Groq (plan B) y crearla como Credential.
+    1.3. Nodo HTTP Request de prueba -> API de Wikipedia (action=query).
+    1.4. Nodo HTTP Request de prueba -> Wikidata (wbsearchentities).
+    1.5. Localizar y validar el endpoint api.php de Qiuwen Baike; probar una
+         búsqueda (action=query&list=search) con un término de ejemplo.
+    1.6. Documentar en README las URLs base y los parámetros que funcionan.
+  Criterio de cierre: las tres APIs devuelven datos válidos desde n8n.
+
+FASE 2 - CONSTRUCCIÓN DE LAS HERRAMIENTAS (TOOLS)
+  Objetivo: encapsular cada fuente como herramienta reutilizable del agente.
+  Pasos:
+    2.1. Tool Wikipedia: búsqueda por título + obtención de extracto.
+    2.2. Tool Wikidata: búsqueda de entidad + extracción de sitelinks.
+    2.3. Tool Qiuwen: búsqueda por título (chino) + obtención de extracto.
+    2.4. Implementar la lógica de alineación de la sección 4 (pivote Wikidata
+         -> título -> búsqueda -> fallback con variantes generadas).
+    2.5. Parametrizar URLs y User-Agent en variables de entorno o Set nodes.
+    2.6. Probar cada tool de forma aislada con 2-3 casos reales.
+  Criterio de cierre: cada tool devuelve texto utilizable de forma autónoma.
+
+FASE 3 - AGENTE Y PROMPT DE MÉTRICAS
+  Objetivo: el agente razona y aplica las tres métricas.
+  Pasos:
+    3.1. Configurar nodo AI Agent con Gemini 2.5 Flash y las tools de Fase 2.
+    3.2. Redactar el system prompt con:
+           - Rol y objetivo.
+           - Definición operativa de las tres métricas (sección 3).
+           - Instrucción de declarar limitaciones y fuentes no encontradas.
+           - Prohibición de inventar datos.
+    3.3. Definir el esquema JSON de salida (reconstrucción, veracidad,
+         honestidad, fuentes consultadas, fuentes ausentes, puntuaciones,
+         justificación breve).
+    3.4. Probar con un caso controlado (ej. Batalla de Gaugamela) y revisar
+         que el JSON cumple el esquema.
+  Criterio de cierre: el agente devuelve un JSON válido y coherente.
+
+FASE 4 - ORQUESTACIÓN DEL FLUJO COMPLETO
+  Objetivo: flujo extremo a extremo listo para usar.
+  Pasos:
+    4.1. Trigger: Chat Trigger (o Webhook con Header Auth si se prefiere).
+    4.2. Conectar Trigger -> AI Agent -> nodo de consolidación/salida.
+    4.3. Añadir manejo de errores por tool (si una fuente falla, continuar y
+         marcarla como ausente).
+    4.4. Formatear la respuesta final para el usuario (texto legible a partir
+         del JSON, o JSON crudo si se prefiere para la demo).
+    4.5. Probar el flujo completo con 2 casos.
+  Criterio de cierre: el flujo responde de principio a fin sin intervención.
+
+FASE 5 - VERSIONADO Y RESPALDO
+  Objetivo: flujo versionado y reproducible.
+  Pasos:
+    5.1. Exportar el workflow a JSON desde la UI (Workflow > Download).
+    5.2. Guardarlo en workflows/ con nombre descriptivo y versión.
+    5.3. Actualizar CHANGELOG.md con los cambios de esta iteración.
+    5.4. Commit y push.
+    5.5. Verificar que el .gitignore excluye cualquier secreto.
+  Criterio de cierre: el JSON importable está en el repo y restaura el flujo.
+
+FASE 6 - PRUEBAS Y AJUSTE DE PROMPT
+  Objetivo: validar el comportamiento con casos diversos.
+  Pasos:
+    6.1. Seleccionar 5-8 eventos con narrativas divergentes conocidas
+         (Gaugamela, campaña de Italia IIGM, Operación Barbarroja,
+         Crisis de los Misiles de Cuba, etc.).
+    6.2. Ejecutar el flujo y guardar salidas (carpeta pruebas/ en el repo).
+    6.3. Revisar coherencia de las puntuaciones y ajustar el system prompt.
+    6.4. Repetir 6.2-6.3 hasta estabilizar resultados.
+    6.5. Exportar y versionar cada versión estable del workflow.
+  Criterio de cierre: resultados estables y defendibles con los casos de prueba.
+
+FASE 7 - CIERRE Y ENTREGA
+  Objetivo: paquete final listo para el equipo.
+  Pasos:
+    7.1. Completar README: arquitectura, requisitos, instalación, importación
+         del workflow, configuración de credenciales, limitaciones conocidas.
+    7.2. Incluir el JSON final del workflow y el docker-compose.yml.
+    7.3. Documentar las fuentes usadas y las descartadas, con el motivo.
+    7.4. Etiquetar una release en GitHub (v1.0).
+  Criterio de cierre: cualquier miembro del equipo puede reproducir el flujo
+  siguiendo el README.
+
+
+--------------------------------------------------------------------------------
+8. RIESGOS Y PLANES B
+--------------------------------------------------------------------------------
+
+  R1. Se agota la cuota de Gemini.
+      -> Cambiar a Groq (llama-3.1-8b-instant) vía Credential distinta.
+
+  R2. Qiuwen Baike no responde o cambia su endpoint.
+      -> Parametrizar la URL; fallback a Baidu Baike o a variantes de título
+         generadas por el LLM; declarar la ausencia en la salida (Honestidad).
+
+  R3. Wikidata devuelve el título occidental para eventos politizados.
+      -> Activar el fallback de la Fase 2.4 (variantes de título/palabras clave).
+
+  R4. El JSON exportado crece y los diffs son ilegibles.
+      -> Aceptado por decisión de diseño; compensar con CHANGELOG.md detallado.
+
+  R5. El agente inventa datos para "rellenar" huecos.
+      -> Prohibición explícita en el system prompt + validación del esquema
+         JSON + casos de prueba que incluyan una fuente ausente.
+
+
+--------------------------------------------------------------------------------
+9. ESTRUCTURA PROPUESTA DEL REPOSITORIO
+--------------------------------------------------------------------------------
+
+  proyecto-n8n-historico/
+  |-- README.md
+  |-- CHANGELOG.md
+  |-- .gitignore
+  |-- docker-compose.yml
+  |-- workflows/
+  |     |-- flujo-principal-v1.json
+  |     |-- (versiones posteriores)
+  |-- pruebas/
+  |     |-- (salidas de los casos de prueba, una carpeta por versión)
+  |-- docs/
+        |-- metricas.md
+        |-- fuentes.md
+
+================================================================================
+FIN DEL DOCUMENTO
+================================================================================

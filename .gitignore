@@ -1,0 +1,20 @@
+# Entorno y secretos
+.env
+.env.*
+*.key
+*.secret
+credentials.json
+
+# Estado local de n8n (no debe versionarse)
+.n8n/
+database.sqlite
+*.sqlite
+*.sqlite-journal
+
+# Logs y temporales
+*.log
+npm-debug.log*
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db

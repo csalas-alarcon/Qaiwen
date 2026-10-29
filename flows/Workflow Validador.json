@@ -1,0 +1,98 @@
+{
+  "name": "Workflow Validador",
+  "nodes": [
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        16
+      ],
+      "id": "4725a0d5-8eb8-4d3b-9f53-373428e4a15d",
+      "name": "Google Gemini Chat Model3",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "qCF3sT1609EpTCeP",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analiza el siguiente JSON de textos crudos de Wikipedia y Qiuwen. Aplica las tres métricas según tu system prompt y devuelve el JSON de análisis.\n\nDATOS:\n{{ $json.input_data }}",
+        "options": {
+          "systemMessage": "Eres un validador de análisis historiográficos. Recibirás un JSON producido por un agente analista. Tu única tarea es verificar que el análisis sea coherente, completo y honesto. NO reescribas el análisis. NO calcules métricas nuevas. Solo valida.\n\n=== INPUT QUE RECIBES ===\n\nUn JSON con esta estructura:\n{\n  \"evento_solicitado\": \"texto\",\n  \"qid\": \"Qxxxxx o null\",\n  \"fuentes\": {\n    \"wikipedia\": { \"titulo_usado\": \"texto\", \"encontrada\": true/false, \"longitud_texto\": 0 },\n    \"qiuwen\": { \"titulo_usado\": \"texto\", \"encontrada\": true/false, \"longitud_texto\": 0 }\n  },\n  \"reconstruccion\": { \"puntuacion\": 0-100 o null, \"proposiciones_comunes\": [...], \"proposiciones_divergentes\": [...], \"justificacion\": \"texto\" },\n  \"veracidad\": { \"wikipedia\": {...}, \"qiuwen\": {...}, \"version_mas_plausible\": \"...\", \"justificacion_global\": \"texto\" },\n  \"honestidad\": { \"wikipedia\": {...}, \"qiuwen\": {...} },\n  \"limitaciones\": [\"...\"]\n}\n\n=== CRITERIOS DE VALIDACIÓN ===\n\nRevisa CADA uno de estos puntos y anota los que fallen:\n\n1. RANGOS VÁLIDOS:\n   - Todas las puntuaciones numéricas (reconstruccion.puntuacion, veracidad.*.puntuacion, honestidad.*.porcentaje_no_verificable) deben estar entre 0 y 100.\n   - Si una fuente tiene \"encontrada: false\" o \"error_tecnico: true\", sus métricas deben ser null, NO 0.\n   - Los contadores de clasificación (A1, A2, B, C) deben ser números enteros no negativos.\n\n2. JUSTIFICACIONES:\n   - Cada puntuación numérica debe tener una \"justificacion\" no vacía (mínimo 20 caracteres).\n   - Una justificación que diga solo \"es correcto\" o \"coincide\" sin argumento es insuficiente.\n\n3. COHERENCIA FUENTE-MÉTRICA:\n   - Si fuentes.wikipedia.encontrada es true, entonces fuentes.wikipedia.longitud_texto debe ser > 0.\n   - Si fuentes.qiuwen.encontrada es true, entonces fuentes.qiuwen.longitud_texto debe ser > 0.\n   - Si fuentes.X.encontrada es false, las métricas de X deben ser null.\n\n4. COHERENCIA INTERNA DE MÉTRICAS:\n   - Si reconstruccion.puntuacion > 70, debe haber al menos 2 proposiciones_comunes no vacías.\n   - Si reconstruccion.puntuacion < 40, debe haber al menos 1 proposición_divergente no vacía.\n   - Si veracidad.version_mas_plausible es \"qiuwen\", la puntuación de veracidad de qiuwen debe ser >= la de wikipedia (o justificarse explícitamente si no).\n   - Si veracidad.version_mas_plausible es \"wikipedia\", la puntuación de veracidad de wikipedia debe ser >= la de qiuwen (o justificarse).\n   - Si honestidad.X.porcentaje_no_verificable es alto (>50), debe haber al menos una proposición clasificada como B o C.\n\n5. LIMITACIONES:\n   - Si alguna fuente tiene encontrada: false, debe aparecer en \"limitaciones\".\n   - Si alguna fuente tiene error_tecnico: true, debe aparecer en \"limitaciones\" como fallo técnico (no como ausencia).\n   - Si qid es null, debe aparecer en \"limitaciones\".\n\n6. HONESTIDAD DEL ANÁLISIS:\n   - El análisis no debe contener afirmaciones de \"verdad absoluta\" (busca frases como \"esto es verdad\", \"definitivamente\", \"sin duda\" referidas a una de las fuentes).\n   - El análisis no debe favorecer sistemáticamente a una fuente sin justificación.\n\n=== FORMATO DE SALIDA ===\n\nDevuelve EXCLUSIVAMENTE un objeto JSON válido, sin texto antes ni después, sin markdown:\n\n{\n  \"aprobado\": true/false,\n  \"problemas\": [\n    {\n      \"tipo\": \"rango_invalido | justificacion_vacia | inconsistencia_fuente | inconsistencia_metrica | limitacion_faltante | honestidad_dudosa\",\n      \"descripcion\": \"texto explicando el problema\",\n      \"campo_afectado\": \"ruta del campo en el JSON (ej. 'veracidad.qiuwen.puntuacion')\"\n    }\n  ],\n  \"recomendacion\": \"texto breve: qué debería corregir el analista, o 'análisis válido' si no hay problemas\"\n}\n\nREGLAS:\n- Si no hay problemas, \"aprobado\": true y \"problemas\": [].\n- Si hay 1 o más problemas, \"aprobado\": false y lista TODOS los problemas detectados (no solo el primero).\n- Sé estricto pero no inventes problemas. Si el análisis es correcto, apruébalo.\n- NO reescribas el análisis. NO propongas puntuaciones alternativas. Solo señala problemas."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        224,
+        -160
+      ],
+      "id": "e98d76fe-2930-4e7d-bab3-7b257e3f0ff1",
+      "name": "AI Agent3"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "input_data"
+            }
+          ]
+        }
+      },
+      "id": "113643dc-6b05-4a52-ac9b-d3e216ab370b",
+      "typeVersion": 1.1,
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        0,
+        -160
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Google Gemini Chat Model3": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent3",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "AI Agent3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "08186b99-660f-4987-9214-6ec30f65e321",
+  "meta": {
+    "instanceId": "43059ac14ad22f66fe9906c5f4710cb5e4f68b5f93270fc1a4c20f4f5f552fb8"
+  },
+  "nodeGroups": [],
+  "id": "AvOSZKHCTfXVUBbM",
+  "tags": []
+}

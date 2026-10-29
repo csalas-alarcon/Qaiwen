@@ -1,0 +1,332 @@
+{
+  "name": "agente-historico",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.5,
+      "position": [
+        -1328,
+        -160
+      ],
+      "id": "dbd4238e-5bf8-4a01-9f9c-a1ae6395f0e2",
+      "name": "When chat message received",
+      "webhookId": "6d90453c-e5d9-4033-887c-7cb82d708a4a"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrae el JSON de la respuesta del agente, aunque venga con markdown o texto extra\nconst raw = $input.first().json.output || $input.first().json.text || '';\n\n// Busca el primer { y el último } para aislar el objeto JSON\nconst start = raw.indexOf('{');\nconst end = raw.lastIndexOf('}');\n\nif (start === -1 || end === -1) {\n  return [{ json: { error: 'No se encontró JSON en la respuesta', raw: raw } }];\n}\n\nconst jsonStr = raw.slice(start, end + 1);\n\ntry {\n  const parsed = JSON.parse(jsonStr);\n  return [{ json: parsed }];\n} catch (e) {\n  return [{ json: { error: 'JSON inválido', detalle: e.message, raw: raw } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -384,
+        -160
+      ],
+      "id": "7f10c5f6-122c-45b4-b4cb-c35e6edf60f3",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai/gpt-oss-20b",
+          "mode": "list",
+          "cachedResultName": "openai/gpt-oss-20b"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -1264,
+        80
+      ],
+      "id": "3a1de561-cf3a-48e5-964f-471f66cd3b42",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "syo3862dg2AjWvF1",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "Eres el coordinador de un sistema de análisis historiográfico compuesto por tres agentes especializados:\n- RECOLECTOR: busca el evento en Wikipedia y Qiuwen Baike.\n- ANALISTA: aplica las tres métricas (Reconstrucción, Veracidad, Honestidad).\n- VALIDADOR: revisa la coherencia del análisis del Analista.\n\nTu flujo de trabajo:\n1. Cuando el usuario proponga un evento histórico, CONFÍRMALO antes de actuar:\n   \"Voy a analizar <evento> consultando Wikipedia y Qiuwen Baike. ¿Procedo?\"\n2. Espera la respuesta del usuario.\n   - Si dice \"sí\" (o equivalente), invoca al RECOLECTOR con el nombre del evento.\n   - Si dice \"no\", pregunta qué evento quiere analizar o termina.\n3. Cuando el RECOLECTOR devuelva los textos, pásalos al ANALISTA.\n4. Cuando el ANALISTA devuelva el JSON, pásalo al VALIDADOR.\n5. Si el VALIDADOR aprueba, presenta el resultado al usuario de forma legible.\n   Si el VALIDADOR rechaza, indica al usuario que el análisis requiere revisión y muestra los problemas detectados.\n\nNUNCA inventes datos. NUNCA saltes la confirmación inicial.",
+          "maxIterations": 30
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -912,
+        -160
+      ],
+      "id": "e15b1c96-9741-4e04-ade9-ace34ab059e5",
+      "name": "AI Agent1"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        -1104,
+        80
+      ],
+      "id": "ea872110-7772-4016-9bad-be6ab3f578f5",
+      "name": "Google Gemini Chat Model1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "qCF3sT1609EpTCeP",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        -976,
+        80
+      ],
+      "id": "7a16c2e9-f513-487a-9ba3-93142ab0b4fa",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "description": "Busca un evento histórico en Wikipedia y Qiuwen Baike y devuelve los textos crudos de ambas fuentes. Requiere como input el nombre del evento (string, preferiblemente en inglés o traducido). Devuelve un JSON con {evento, qid, wikipedia:{titulo, texto, encontrada, error_tecnico}, qiuwen:{titulo, texto, encontrada, error_tecnico}, limitaciones}. Úsala SIEMPRE en primer lugar, después de que el usuario confirme que quiere analizar el evento.",
+        "workflowId": {
+          "__rl": true,
+          "value": "dXfHKFrbQ2CVoPxR",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/dXfHKFrbQ2CVoPxR",
+          "cachedResultName": "Workflow Recolector"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "input_data": "={{ $fromAI('input_data', 'El nombre del evento histórico a analizar', 'string') }}"
+          },
+          "matchingColumns": [
+            "input_data"
+          ],
+          "schema": [
+            {
+              "id": "input_data",
+              "displayName": "input_data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        -832,
+        80
+      ],
+      "id": "679d3b52-1c3a-4086-8d19-6c58b9c97e9d",
+      "name": "Call 'Workflow Recolector'"
+    },
+    {
+      "parameters": {
+        "description": "Aplica las tres métricas historiográficas (Reconstrucción, Veracidad, Honestidad) a un JSON de textos crudos de Wikipedia y Qiuwen. Requiere como input el JSON COMPLETO producido por agente_recolector (no el nombre del evento, no un subconjunto de campos). Devuelve el análisis completo con puntuaciones, justificaciones y limitaciones. Úsala SIEMPRE después de agente_recolector y antes de agente_validador.",
+        "workflowId": {
+          "__rl": true,
+          "value": "5HEwSuK5OjEwyQVt",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/5HEwSuK5OjEwyQVt",
+          "cachedResultName": "Workflow Analista"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "input_data": "={{ $fromAI('input_data', 'El objeto JSON COMPLETO devuelto por el agente_recolector. Pasa el JSON exacto sin modificar, resumir ni añadir texto.', 'string') }}"
+          },
+          "matchingColumns": [
+            "input_data"
+          ],
+          "schema": [
+            {
+              "id": "input_data",
+              "displayName": "input_data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        -688,
+        80
+      ],
+      "id": "13a71703-9614-4544-a7ba-93a5a1af5bfd",
+      "name": "Call 'Workflow Analista'"
+    },
+    {
+      "parameters": {
+        "description": "Valida la coherencia interna de un análisis historiográfico. Recibe como input el JSON COMPLETO producido por agente_analista (no el nombre del evento, no el JSON del recolector). Devuelve {aprobado: true/false, problemas: [...], recomendacion: texto}. Detecta puntuaciones fuera de rango, justificaciones vacías, inconsistencias entre fuentes y métricas, y limitaciones faltantes. Úsala SIEMPRE después de agente_analista y antes de presentar el resultado al usuario.",
+        "workflowId": {
+          "__rl": true,
+          "value": "AvOSZKHCTfXVUBbM",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/AvOSZKHCTfXVUBbM",
+          "cachedResultName": "Workflow Validador"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "input_data": "={{ $fromAI('input_data', 'El objeto JSON COMPLETO devuelto por el agente_analista. Pasa el JSON exacto sin modificar, resumir ni añadir texto.', 'string') }}"
+          },
+          "matchingColumns": [
+            "input_data"
+          ],
+          "schema": [
+            {
+              "id": "input_data",
+              "displayName": "input_data",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        -560,
+        80
+      ],
+      "id": "93fd792a-217b-4d0e-8565-e3db49350b0a",
+      "name": "Call 'Workflow Validador'"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "AI Agent1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'Workflow Recolector'": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'Workflow Analista'": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'Workflow Validador'": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "6739ee57-4fd3-4e98-8785-df9ca94a87f4",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "43059ac14ad22f66fe9906c5f4710cb5e4f68b5f93270fc1a4c20f4f5f552fb8"
+  },
+  "nodeGroups": [],
+  "id": "8KWvohmI5lK8qatA",
+  "tags": []
+}

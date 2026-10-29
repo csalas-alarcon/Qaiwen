@@ -1,0 +1,362 @@
+{
+  "name": "Workflow Recolector",
+  "nodes": [
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analiza los siguientes datos:\n{{ $json.input_data }}",
+        "options": {
+          "systemMessage": "Eres un agente recolector de fuentes históricas. Tu única tarea es obtener los textos de Wikipedia y Qiuwen Baike para un evento histórico dado.\n\nNO interpretes los textos. NO calcules métricas. NO emitas juicios. Solo recopila.\n\n=== ORDEN OBLIGATORIO DE LAS HERRAMIENTAS ===\n\n1. LIMPIEZA DEL INPUT:\n   - Corrige errores ortográficos evidentes (ej. \"Humilliation\" → \"Humiliation\", \"Barbarrosa\" → \"Barbarossa\").\n   - Elimina artículos, preposiciones y palabras vacías innecesarias (ej. \"la batalla de\" → \"batalla\").\n   - Normaliza mayúsculas y espacios.\n   - Si el usuario ha escrito el evento en español, TRADÚCELO al inglés antes de pasarlo a Wikidata (Wikidata indexa mejor en inglés).\n\n2. ANCLAJE EN WIKIDATA:\n   Llama SIEMPRE a \"alinear_titulo_obligatorio\" con el término limpio. Devuelve qid, titulo_en, titulo_zh, titulo_ru.\n   - Si qid es null o vacío, REINTENTA hasta 2 veces más con variantes del nombre:\n     a) Traducción literal al inglés.\n     b) Denominaciones históricas alternativas (ej. \"Gran Guerra Patria\" para el frente oriental de la IIGM).\n     c) Nombre oficial en el idioma original del evento.\n   - Si tras los reintentos sigue sin qid, anótalo en \"limitaciones\" y continúa con los títulos que puedas deducir.\n\n3. BÚSQUEDA EN WIKIPEDIA:\n   Con titulo_en, llama a \"buscar_wikipedia\".\n   - Si titulo_en está vacío, usa el término limpio en inglés como fallback.\n   - Si Wikipedia devuelve error técnico (timeout, 5xx), reintenta UNA VEZ. Si sigue fallando, marca error_tecnico: true.\n\n4. BÚSQUEDA EN QIUWEN (en este orden exacto):\n   a) Llama a \"opensearch\" con titulo_zh (o con una variante generada por ti si titulo_zh está vacío).\n   b) EXAMINA el array de títulos (índice 1 del array de respuesta):\n      - Si contiene al menos un título, usa ESE título exacto (el primero del array) como parámetro \"titulo_canonico\" de \"buscar_qiuwen_con_titulo_chino\".\n      - Si el array está vacío, pasa titulo_zh original a \"buscar_qiuwen_con_titulo_chino\" como fallback.\n   c) Si la búsqueda devuelve resultados pero ninguno es relevante (ningún snippet menciona el concepto), prueba UNA VEZ con la variante opuesta de chino (simplificado ↔ tradicional) y reintenta opensearch + búsqueda.\n   d) Si tras la alternancia sigue sin resultados relevantes, genera 1 o 2 variantes alternativas del título (denominación histórica, traducción literal) y repite opensearch + búsqueda.\n   e) Si Qiuwen devuelve resultados pero ninguno tiene el título exacto, examina los snippets: si mencionan el concepto, usa el artículo más relevante como fuente y anótalo en \"limitaciones\".\n   f) Si tras todos los intentos no hay resultado, marca encontrada: false.\n\n5. DISTINGUIR FALLO TÉCNICO DE AUSENCIA:\n   - \"encontrada: false\" → la búsqueda devolvió resultados vacíos sin error. El artículo no existe.\n   - \"error_tecnico: true\" → la API devolvió timeout, 5xx o no respondió. La fuente NO está disponible, pero no sabemos si el artículo existe.\n   Estas dos situaciones son DISTINTAS y deben reflejarse por separado en el JSON de salida.\n\n=== REGLAS DE HONESTIDAD ===\n\n- NUNCA inventes contenido de ninguna fuente.\n- NUNCA rellenes con conocimiento propio. Si una fuente no devuelve texto, su campo \"texto\" debe ser null.\n- Documenta en \"limitaciones\" cualquier anomalía: qid no encontrado, fuente ausente, error técnico, artículo relacionado en lugar de dedicado.\n\n=== FORMATO DE SALIDA ===\n\nDevuelve EXCLUSIVAMENTE un objeto JSON válido, sin texto antes ni después, sin markdown, sin bloques de código:\n\n{\n  \"evento\": \"texto (el evento tal como lo pidió el usuario, sin limpiar)\",\n  \"qid\": \"Qxxxxx o null\",\n  \"wikipedia\": {\n    \"titulo\": \"texto o null\",\n    \"texto\": \"texto completo o null\",\n    \"encontrada\": true/false,\n    \"error_tecnico\": true/false\n  },\n  \"qiuwen\": {\n    \"titulo\": \"texto o null\",\n    \"texto\": \"texto completo o null\",\n    \"encontrada\": true/false,\n    \"error_tecnico\": true/false\n  },\n  \"limitaciones\": [\"...\"]\n}\n\nREGLAS DEL JSON:\n- Si wikipedia.encontrada es false, wikipedia.texto debe ser null.\n- Si wikipedia.error_tecnico es true, wikipedia.texto debe ser null y wikipedia.encontrada debe ser false.\n- Lo mismo para qiuwen.\n- Si qid es null, anótalo en limitaciones."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -736,
+        -160
+      ],
+      "id": "19828d22-e34c-432a-b738-1f09466d58df",
+      "name": "AI Agent",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        -928,
+        80
+      ],
+      "id": "3cd77e3d-0143-4645-a760-0e235935018d",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "qCF3sT1609EpTCeP",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "description": "OBLIGATORIO llamar PRIMERO. Dado el nombre de un evento histórico (limpio y preferiblemente en inglés), devuelve su Q-ID y sus títulos oficiales en inglés, chino y ruso. Úsala para anclar el evento en Wikidata y obtener los títulos canónicos para buscar en Wikipedia y Qiuwen.",
+        "workflowId": {
+          "__rl": true,
+          "value": "C5VoPdrLA40zJ93q",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/C5VoPdrLA40zJ93q",
+          "cachedResultName": "alineacion-wikidata"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "evento": "={{ $fromAI('evento', 'Nombre del evento histórico para buscar en Wikidata y obtener sus títulos oficiales en varios idiomas', 'string') }}"
+          },
+          "matchingColumns": [
+            "evento"
+          ],
+          "schema": [
+            {
+              "id": "evento",
+              "displayName": "evento",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        -800,
+        80
+      ],
+      "id": "11211ae9-4cf7-40b1-9d44-796cab00a8b9",
+      "name": "alinear_titulo_obligatorio"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Busca un evento en Wikipedia en inglés y devuelve el texto introductorio del artículo más relevante. Fuente occidental de referencia. Requiere el título en inglés obtenido de alinear_titulo_obligatorio.",
+        "url": "https://en.wikipedia.org/w/api.php",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "action",
+              "value": "query"
+            },
+            {
+              "name": "generator",
+              "value": "search"
+            },
+            {
+              "name": "gsrsearch",
+              "value": "={{ $fromAI('termino_busqueda', 'Término o título del evento histórico', 'string') }}"
+            },
+            {
+              "name": "gsrlimit",
+              "value": "2"
+            },
+            {
+              "name": "prop",
+              "value": "extracts"
+            },
+            {
+              "name": "exintro",
+              "value": "1"
+            },
+            {
+              "name": "explaintext",
+              "value": "1"
+            },
+            {
+              "name": "exlimit",
+              "value": "2"
+            },
+            {
+              "name": "format",
+              "value": "json"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "SalasProject/1.0 (csalas0821@gmail.com)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        -672,
+        80
+      ],
+      "id": "2399db29-0dcc-4dee-b4a3-5cde37e4703b",
+      "name": "buscar_wikipedia"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Obtiene el contenido (extracto introductorio) de un artículo específico de Qiuwen Baike. REQUIERE un título canónico y exacto, que debe provenir de opensearch. NUNCA la llames con un término de búsqueda genérico, solo con un título de artículo confirmado. Acepta chino simplificado o tradicional.",
+        "url": "https://www.qiuwenbaike.cn/api.php",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "action",
+              "value": "query"
+            },
+            {
+              "name": "titles",
+              "value": "={{ $fromAI('titulo_canonico', 'Título exacto del artículo en Qiuwen Baike, obtenido de la herramienta opensearch', 'string') }}"
+            },
+            {
+              "name": "prop",
+              "value": "extracts"
+            },
+            {
+              "name": "explaintext",
+              "value": "1"
+            },
+            {
+              "name": "exintro",
+              "value": "1"
+            },
+            {
+              "name": "format",
+              "value": "json"
+            },
+            {
+              "name": "exlimit",
+              "value": "1"
+            },
+            {
+              "name": "redirects",
+              "value": "1"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "SalasProject/1.0 (csalas0821@gmail.com)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        -544,
+        80
+      ],
+      "id": "0f316fda-aa0c-45c8-a433-bb89f624d160",
+      "name": "buscar_qiuwen_con_titulo_chino"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Busca títulos de artículos en Qiuwen Baike por coincidencia exacta o prefijo. Devuelve un array [término, [títulos], [descripciones], [urls]]. Si el array de títulos (índice 1) está vacío, no existe artículo con ese título exacto. Úsala SIEMPRE ANTES de buscar_qiuwen_con_titulo_chino para obtener el título canónico y evitar ruido en la búsqueda por texto completo. Acepta chino simplificado o tradicional.",
+        "url": "https://www.qiuwenbaike.cn/api.php",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "action",
+              "value": "opensearch"
+            },
+            {
+              "name": "search",
+              "value": "={{ $fromAI('termino_chino', 'Título del evento en chino para buscar en Qiuwen Baike', 'string') }}"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            },
+            {
+              "name": "format",
+              "value": "json"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "SalasProject/1.0 (csalas0821@gmail.com)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        -416,
+        80
+      ],
+      "id": "24f45636-2d11-4e70-b054-3133d61a8eb2",
+      "name": "Qiuwen - opensearch"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "input_data"
+            }
+          ]
+        }
+      },
+      "id": "101eb9e7-6f08-403a-928e-0b39798fccb4",
+      "typeVersion": 1.1,
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        -1152,
+        -160
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "alinear_titulo_obligatorio": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscar_wikipedia": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buscar_qiuwen_con_titulo_chino": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qiuwen - opensearch": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "5ca7547e-a400-4175-9ca4-eed33d74d5f9",
+  "meta": {
+    "instanceId": "43059ac14ad22f66fe9906c5f4710cb5e4f68b5f93270fc1a4c20f4f5f552fb8"
+  },
+  "nodeGroups": [],
+  "id": "dXfHKFrbQ2CVoPxR",
+  "tags": []
+}
